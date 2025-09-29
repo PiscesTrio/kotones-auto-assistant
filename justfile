@@ -1,11 +1,11 @@
 set dotenv-load
 set windows-shell := ["powershell", "-c"]
-set shell := ["pwsh", "-c"]
+set shell := ["bash", "-c"]
 
 shebang_pwsh := if os() == 'windows' {
   'powershell.exe'
 } else {
-  '/usr/bin/env pwsh'
+  '/usr/bin/env bash'
 }
 shebang_python := if os() == 'windows' {
   'python.exe'
@@ -17,10 +17,15 @@ default:
     @just --list
 
 fetch-submodule:
+    #!{{shebang_pwsh}}
     git submodule update --init --remote --recursive
 
 resource:
+    if os() == 'windows' {
     python tools\make_resources.py
+    } else {
+    python tools/make_resources.py
+    }
 
 devtool:
     cd kotonebot-devtool; npm run dev
