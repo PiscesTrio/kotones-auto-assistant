@@ -36,7 +36,7 @@ env: fetch-submodule
     Write-Host "Installing requirements..."
     $IsWindows = $env:OS -match "Windows"
     
-    if ($IsWindows) {
+    if os() == 'windows' {
         .\.venv\Scripts\pip install -r requirements.dev.txt
         .\.venv\Scripts\pip install -r requirements.win.txt
         .\.venv\Scripts\pip install -r .\submodules\GkmasObjectManager\requirements.txt
@@ -46,7 +46,41 @@ env: fetch-submodule
     }
     python tools/make_resources.py
 
+env-linux: fetch-submodule
+    #!{{shebang_pwsh}}
+    # set -e
+    # echo "Creating virtual environment if it doesn't exist..."
+    # if [ ! -d ".venv" ]; then
+    #     python -m venv .venv
+    # fi
+    # ./.venv/bin/pip install -r requirements.dev.txt
+    # ./.venv/bin/pip install -r ./submodules/GkmasObjectManager/requirements.txt
+    pip install -r requirements.dev.txt
+    pip install -r ./submodules/GkmasObjectManager/requirements.txt
+    mkdir -p ./kaa/sprites
+    python tools/make_resources.py   
+
 generate-metadata: env
+    #!{{shebang_python}}
+    # 更新日志
+    from pathlib import Path
+    with open("WHATS_NEW.md", "r", encoding="utf-8") as f:
+        content = f.read()
+    metadata_path = Path("kaa/metadata.py")
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(metadata_path, "w", encoding="utf-8") as f:
+        f.write(f'WHATS_NEW = """\n{content}\n"""')
+    
+    # 版本号
+    from subprocess import check_output
+    # 获取当前分支上 kaa 开头的 tag，多重排序：commit 日期倒序 -> tag 日期倒序 -> tag 名称倒序
+    version = check_output(['git', 'for-each-ref', '--sort=-committerdate', '--sort=-creatordate', '--sort=-refname', '--format=%(refname:short)', 'refs/tags/kaa-*', '--merged', 'HEAD']).decode().strip().split('\n')[0]
+    if version.startswith('kaa-v'):
+        version = version[5:]
+    with open("version", "w", encoding="utf-8") as f:
+        f.write(version)
+
+generate-metadata-linux: env-linux
     #!{{shebang_python}}
     # 更新日志
     from pathlib import Path
@@ -94,9 +128,38 @@ extract-game-data:
         python .\tools\db\extract_resources.py
     }
 
+extract-game-data-linux:
+    #!{{shebang_pwsh}}
+    echo "Extracting game data..."
+    mkdir -p ./kaa/resources
+    touch ./kaa/resources/__init__.py
+    currentHash=$(git -C ./submodules/gakumasu-diff rev-parse HEAD)
+    hashFile="./kaa/resources/game_ver.txt"
+    shouldUpdate=1
+
+    if [ -f "$hashFile" ]; then
+        savedHash=$(cat "$hashFile")
+        if [ "$currentHash" = "$savedHash" ]; then
+            echo "Game data is up to date. Skipping extraction."
+            shouldUpdate=0
+        fi
+    fi
+
+    if [ "$shouldUpdate" = "1" ]; then
+        echo "Game data needs update. Extracting..."
+        echo "$currentHash" > "$hashFile"
+        rm -f ./kaa/resources/game.db
+        python tools/db/extract_schema.py -i ./submodules/gakumasu-diff -d ./kaa/resources/game.db
+        python -m tools.db.extract_resources
+    fi
+
 @package-resource:
     Write-Host "Packaging kotonebot-resource..."
     @python -m build -s kotonebot-resource
+
+@package-resource-linux:
+    echo "Packaging kotonebot-resource..."
+    python -m build -s kotonebot-resource
 
 # Package KAA
 @package: env package-resource generate-metadata extract-game-data
@@ -112,6 +175,18 @@ extract-game-data:
     Copy-Item .\kotonebot-resource\dist\* .\dist\
 
     python tools/make_resources.py # Make R.py in development mode
+
+# Package KAA
+@package-linux: env-linux package-resource-linux generate-metadata-linux extract-game-data-linux
+    python ./tools/make_resources.py -p # Make R.py in production mode
+
+    echo "Removing old build files..."
+    rm -rf dist build
+    echo "Packaging KAA..."
+    python -m build
+    echo "Copying kotonebot-resource to dist..."
+    cp ./kotonebot-resource/dist/* ./dist/
+    python ./tools/make_resources.py
 
 # Upload to PyPI
 publish: package
